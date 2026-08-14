@@ -77,21 +77,41 @@ def get_trace_dir() -> Path | None:
     return _TRACE_DIR
 
 
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _run_last_activity(path: Path) -> float:
+    """Newest mtime of the run dir or anything inside it.
+
+    A directory's own mtime only changes when entries are added or removed,
+    so a long-lived process appending to ``trace.jsonl`` would look stale by
+    dir mtime alone. Any process still writing traces keeps its newest file
+    fresh, which shields concurrently active runs from age-based pruning.
+    """
+    newest = _mtime(path)
+    try:
+        for child in path.rglob("*"):
+            newest = max(newest, _mtime(child))
+    except OSError:
+        pass
+    return newest
+
+
 def _prune_stale_trace_runs(root: Path, *, current: Path | None) -> None:
     """Best-effort pruning of old ``run-*`` dirs under the shared trace root.
 
-    Keeps the ``_PRUNE_KEEP_RECENT_RUNS`` most recent runs and drops any run
-    older than ``_PRUNE_MAX_AGE_DAYS``. The current session's run dir is
-    never touched. Explicit ``LINKEDIN_DEBUG_TRACE_DIR`` locations are
-    user-managed, live outside this root, and are never pruned.
+    Keeps the ``_PRUNE_KEEP_RECENT_RUNS`` most recently active runs and
+    drops any run whose last write is older than ``_PRUNE_MAX_AGE_DAYS``.
+    The current session's run dir is never touched. Explicit
+    ``LINKEDIN_DEBUG_TRACE_DIR`` locations are user-managed, live outside
+    this root, and are never pruned. Tracing is best-effort by design: if a
+    pruned run belonged to a process that is somehow still alive, its next
+    ``record_page_trace`` recreates the dir and keeps writing.
     """
-
-    def mtime(path: Path) -> float:
-        try:
-            return path.stat().st_mtime
-        except OSError:
-            return 0.0
-
     try:
         candidates = [
             path
@@ -101,11 +121,15 @@ def _prune_stale_trace_runs(root: Path, *, current: Path | None) -> None:
     except OSError:
         return
 
-    candidates.sort(key=mtime, reverse=True)
+    by_activity = sorted(
+        ((_run_last_activity(path), path) for path in candidates),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
     now = time.time()
     max_age_seconds = _PRUNE_MAX_AGE_DAYS * 86400
-    for index, path in enumerate(candidates):
-        if index < _PRUNE_KEEP_RECENT_RUNS and now - mtime(path) <= max_age_seconds:
+    for index, (last_activity, path) in enumerate(by_activity):
+        if index < _PRUNE_KEEP_RECENT_RUNS and now - last_activity <= max_age_seconds:
             continue
         try:
             shutil.rmtree(path)
