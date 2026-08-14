@@ -15,9 +15,7 @@ from fastmcp import Context, FastMCP
 from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.core.exceptions import AuthenticationError
-from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
-from linkedin_mcp_server.error_handler import raise_tool_error
+from linkedin_mcp_server.dependencies import get_ready_extractor, tool_error_boundary
 from linkedin_mcp_server.scraping.extractor import build_section_result
 
 logger = logging.getLogger(__name__)
@@ -63,7 +61,7 @@ def register_feed_tools(
             is reachable via its permalink in references["feed"]. The LLM
             should parse sections["feed"] for post bodies.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_feed"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_feed"
             )
@@ -80,11 +78,3 @@ def register_feed_tools(
             return build_section_result(
                 "https://www.linkedin.com/feed/", "feed", extracted
             )
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_feed")
-        except Exception as e:
-            raise_tool_error(e, "get_feed")

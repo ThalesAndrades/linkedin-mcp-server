@@ -14,9 +14,7 @@ from pydantic import Field
 
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.core.exceptions import AuthenticationError
-from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
-from linkedin_mcp_server.error_handler import raise_tool_error
+from linkedin_mcp_server.dependencies import get_ready_extractor, tool_error_boundary
 from linkedin_mcp_server.scraping import parse_person_sections
 from linkedin_mcp_server.scraping.extractor import FilterValidationError
 
@@ -68,7 +66,7 @@ def register_person_tools(
             Includes unknown_sections list when unrecognised names are passed.
             The LLM should parse the raw text in each section.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_person_profile"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_person_profile"
             )
@@ -92,14 +90,6 @@ def register_person_tools(
                 result["unknown_sections"] = unknown
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_person_profile")
-        except Exception as e:
-            raise_tool_error(e, "get_person_profile")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -139,7 +129,7 @@ def register_person_tools(
             Dict with url, sections (name -> raw text), and optional references.
             The LLM should parse the raw text to extract individual people and their profiles.
         """
-        try:
+        async with tool_error_boundary(ctx, "search_people"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="search_people"
             )
@@ -171,18 +161,6 @@ def register_person_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except ToolError:
-            # Already a properly formatted client-facing error; do not
-            # log it as "Unexpected error" via raise_tool_error.
-            raise
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "search_people")
-        except Exception as e:
-            raise_tool_error(e, "search_people")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -220,7 +198,7 @@ def register_person_tools(
             account is exhausted. The ``message`` is the raw Premium dialog
             text read from LinkedIn.
         """
-        try:
+        async with tool_error_boundary(ctx, "connect_with_person"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="connect_with_person"
             )
@@ -244,14 +222,6 @@ def register_person_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "connect_with_person")
-        except Exception as e:
-            raise_tool_error(e, "connect_with_person")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -282,7 +252,7 @@ def register_person_tools(
             Dict with url and sidebar_profiles mapping section key to a list of
             /in/username/ paths. Only sections present on the page are included.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_sidebar_profiles"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_sidebar_profiles"
             )
@@ -297,14 +267,6 @@ def register_person_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_sidebar_profiles")
-        except Exception as e:
-            raise_tool_error(e, "get_sidebar_profiles")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -339,7 +301,7 @@ def register_person_tools(
             Dict with url, sections (name -> raw text), and optional references.
             The url field reflects the resolved profile URL, revealing the real username.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_my_profile"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_my_profile"
             )
@@ -358,11 +320,3 @@ def register_person_tools(
                 result["unknown_sections"] = unknown
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_my_profile")
-        except Exception as e:
-            raise_tool_error(e, "get_my_profile")  # NoReturn

@@ -12,10 +12,9 @@ from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.core.exceptions import (
-    AuthenticationError,
     LinkedInScraperException,
 )
-from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
+from linkedin_mcp_server.dependencies import get_ready_extractor, tool_error_boundary
 from linkedin_mcp_server.error_handler import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ def register_messaging_tools(
         Returns:
             Dict with url, sections (inbox -> raw text), and optional references.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_inbox"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_inbox"
             )
@@ -63,14 +62,6 @@ def register_messaging_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_inbox")
-        except Exception as e:
-            raise_tool_error(e, "get_inbox")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -118,7 +109,7 @@ def register_messaging_tools(
                 "get_conversation",
             )
 
-        try:
+        async with tool_error_boundary(ctx, "get_conversation"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_conversation"
             )
@@ -142,14 +133,6 @@ def register_messaging_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_conversation")
-        except Exception as e:
-            raise_tool_error(e, "get_conversation")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -178,7 +161,7 @@ def register_messaging_tools(
         Returns:
             Dict with url, sections (search_results -> raw text), and optional references.
         """
-        try:
+        async with tool_error_boundary(ctx, "search_conversations"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="search_conversations"
             )
@@ -195,14 +178,6 @@ def register_messaging_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "search_conversations")
-        except Exception as e:
-            raise_tool_error(e, "search_conversations")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -239,7 +214,7 @@ def register_messaging_tools(
         Returns:
             Dict with url, status, message, recipient_selected, and sent.
         """
-        try:
+        async with tool_error_boundary(ctx, "send_message"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="send_message"
             )
@@ -261,11 +236,3 @@ def register_messaging_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "send_message")
-        except Exception as e:
-            raise_tool_error(e, "send_message")  # NoReturn

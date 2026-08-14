@@ -1,9 +1,11 @@
 """Helpers used by MCP tools after bootstrap gating."""
 
 import logging
-from typing import NoReturn
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, NoReturn
 
 from fastmcp import Context
+from fastmcp.exceptions import ToolError
 
 from linkedin_mcp_server.bootstrap import (
     RuntimePolicy,
@@ -72,6 +74,34 @@ async def handle_auth_error(
     except Exception as close_exc:
         logger.warning("Failed to close stale browser (ignored): %s", close_exc)
     await invalidate_auth_and_trigger_relogin(ctx)  # always raises
+
+
+@asynccontextmanager
+async def tool_error_boundary(
+    ctx: Context | None, tool_name: str
+) -> AsyncIterator[None]:
+    """Map exceptions escaping a tool body to client-facing ToolErrors.
+
+    Single home for the ladder every tool used to hand-roll:
+
+    - ``ToolError`` passes through untouched — it is already formatted for
+      the client (e.g. raised by ``get_ready_extractor`` or validation
+      code inside the body) and must not be re-logged as unexpected.
+    - ``AuthenticationError`` closes the stale browser and triggers
+      re-login; the resulting bootstrap exception is mapped for the client.
+    - Anything else goes through ``raise_tool_error``.
+    """
+    try:
+        yield
+    except ToolError:
+        raise
+    except AuthenticationError as e:
+        try:
+            await handle_auth_error(e, ctx)
+        except Exception as relogin_exc:
+            raise_tool_error(relogin_exc, tool_name)
+    except Exception as e:
+        raise_tool_error(e, tool_name)
 
 
 async def get_ready_extractor(

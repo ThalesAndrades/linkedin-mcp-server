@@ -40,7 +40,9 @@ class TestBuildSectionResult:
     """Tests for the shared single-section result assembly."""
 
     def test_text_populates_sections_and_references(self):
-        refs = [{"kind": "person", "url": "/in/testuser/", "text": "Test User"}]
+        refs: list[Reference] = [
+            {"kind": "person", "url": "/in/testuser/", "text": "Test User"}
+        ]
         result = build_section_result(
             "https://www.linkedin.com/x/", "employees", extracted("Body", refs)
         )
