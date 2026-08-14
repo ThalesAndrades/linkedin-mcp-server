@@ -182,7 +182,9 @@ class TestGetReadyExtractor:
         mock_ctx.report_progress = AsyncMock()
 
         with patch(
-            "linkedin_mcp_server.tools.person.handle_auth_error",
+            # The tool wrapper routes auth errors through tool_error_boundary,
+            # which resolves handle_auth_error from the dependencies module.
+            "linkedin_mcp_server.dependencies.handle_auth_error",
             new_callable=AsyncMock,
             side_effect=AuthenticationStartedError("login opened"),
         ) as mock_handle:

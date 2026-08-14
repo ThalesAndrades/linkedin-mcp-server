@@ -12,12 +12,9 @@ from fastmcp import Context, FastMCP
 
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.core.exceptions import AuthenticationError
-from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
-from linkedin_mcp_server.error_handler import raise_tool_error
+from linkedin_mcp_server.dependencies import get_ready_extractor, tool_error_boundary
 from linkedin_mcp_server.scraping import parse_company_sections
-from linkedin_mcp_server.scraping.extractor import _RATE_LIMITED_MSG
-from linkedin_mcp_server.scraping.link_metadata import Reference
+from linkedin_mcp_server.scraping.extractor import build_section_result
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +62,7 @@ def register_company_tools(
             URL facet; plain-text company names are silently ignored by
             that facet.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_company_profile"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_company_profile"
             )
@@ -86,14 +83,6 @@ def register_company_tools(
                 result["unknown_sections"] = unknown
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_company_profile")
-        except Exception as e:
-            raise_tool_error(e, "get_company_profile")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -118,7 +107,7 @@ def register_company_tools(
             Dict with url, sections (name -> raw text), and optional references.
             The LLM should parse the raw text to extract individual posts.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_company_posts"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_company_posts"
             )
@@ -131,35 +120,9 @@ def register_company_tools(
             url = f"https://www.linkedin.com/company/{company_name}/posts/"
             extracted = await extractor.extract_page(url, section_name="posts")
 
-            sections: dict[str, str] = {}
-            references: dict[str, list[Reference]] = {}
-            section_errors: dict[str, dict[str, Any]] = {}
-            if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-                sections["posts"] = extracted.text
-                if extracted.references:
-                    references["posts"] = extracted.references
-            elif extracted.error:
-                section_errors["posts"] = extracted.error
-
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
-            result: dict[str, Any] = {
-                "url": url,
-                "sections": sections,
-            }
-            if references:
-                result["references"] = references
-            if section_errors:
-                result["section_errors"] = section_errors
-            return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_company_posts")
-        except Exception as e:
-            raise_tool_error(e, "get_company_posts")  # NoReturn
+            return build_section_result(url, "posts", extracted)
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -184,7 +147,7 @@ def register_company_tools(
             Dict with url, sections (search_results -> raw text), and optional references.
             The LLM should parse the raw text to extract individual companies and their pages.
         """
-        try:
+        async with tool_error_boundary(ctx, "search_companies"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="search_companies"
             )
@@ -199,14 +162,6 @@ def register_company_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "search_companies")
-        except Exception as e:
-            raise_tool_error(e, "search_companies")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -249,7 +204,7 @@ def register_company_tools(
             Dict with url, sections (employees -> raw text), and optional references.
             References include /in/ profile paths for listed employees.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_company_employees"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_company_employees"
             )
@@ -268,11 +223,3 @@ def register_company_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_company_employees")
-        except Exception as e:
-            raise_tool_error(e, "get_company_employees")  # NoReturn

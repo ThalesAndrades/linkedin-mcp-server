@@ -11,9 +11,7 @@ from fastmcp import Context, FastMCP
 from pydantic import Field
 
 from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
-from linkedin_mcp_server.core.exceptions import AuthenticationError
-from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
-from linkedin_mcp_server.error_handler import raise_tool_error
+from linkedin_mcp_server.dependencies import get_ready_extractor, tool_error_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +44,7 @@ def register_job_tools(
             Dict with url, sections (name -> raw text), and optional references.
             The LLM should parse the raw text to extract job details.
         """
-        try:
+        async with tool_error_boundary(ctx, "get_job_details"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_job_details"
             )
@@ -61,14 +59,6 @@ def register_job_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "get_job_details")
-        except Exception as e:
-            raise_tool_error(e, "get_job_details")  # NoReturn
 
     @mcp.tool(
         timeout=tool_timeout,
@@ -111,7 +101,7 @@ def register_job_tools(
             Dict with url, sections (name -> raw text), job_ids (list of
             numeric job ID strings usable with get_job_details), and optional references.
         """
-        try:
+        async with tool_error_boundary(ctx, "search_jobs"):
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="search_jobs"
             )
@@ -141,11 +131,3 @@ def register_job_tools(
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
-
-        except AuthenticationError as e:
-            try:
-                await handle_auth_error(e, ctx)
-            except Exception as relogin_exc:
-                raise_tool_error(relogin_exc, "search_jobs")
-        except Exception as e:
-            raise_tool_error(e, "search_jobs")  # NoReturn

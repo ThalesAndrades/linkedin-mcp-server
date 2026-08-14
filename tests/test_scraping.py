@@ -19,6 +19,8 @@ from linkedin_mcp_server.scraping.extractor import (
     _RATE_LIMITED_MSG,
     _build_feed_references,
     _truncate_linkedin_noise,
+    build_section_result,
+    rate_limit_section_error,
     strip_conversation_chrome,
     strip_linkedin_noise,
 )
@@ -32,6 +34,47 @@ def extracted(
 ) -> ExtractedSection:
     """Create an ExtractedSection for tests."""
     return ExtractedSection(text=text, references=references or [], error=error)
+
+
+class TestBuildSectionResult:
+    """Tests for the shared single-section result assembly."""
+
+    def test_text_populates_sections_and_references(self):
+        refs: list[Reference] = [
+            {"kind": "person", "url": "/in/testuser/", "text": "Test User"}
+        ]
+        result = build_section_result(
+            "https://www.linkedin.com/x/", "employees", extracted("Body", refs)
+        )
+        assert result["sections"] == {"employees": "Body"}
+        assert result["references"] == {"employees": refs}
+        assert "section_errors" not in result
+
+    def test_rate_limit_sentinel_maps_to_section_errors(self):
+        result = build_section_result(
+            "https://www.linkedin.com/x/", "employees", extracted(_RATE_LIMITED_MSG)
+        )
+        assert result["sections"] == {}
+        assert "references" not in result
+        assert result["section_errors"]["employees"] == rate_limit_section_error()
+        assert result["section_errors"]["employees"]["error_type"] == "rate_limit"
+
+    def test_extraction_error_maps_to_section_errors(self):
+        result = build_section_result(
+            "https://www.linkedin.com/x/",
+            "employees",
+            extracted("", error={"issue_template_path": "/tmp/issue.md"}),
+        )
+        assert result["sections"] == {}
+        assert result["section_errors"]["employees"]["issue_template_path"] == (
+            "/tmp/issue.md"
+        )
+
+    def test_empty_text_without_error_yields_bare_result(self):
+        result = build_section_result(
+            "https://www.linkedin.com/x/", "employees", extracted("")
+        )
+        assert result == {"url": "https://www.linkedin.com/x/", "sections": {}}
 
 
 class TestBuildJobSearchUrl:
@@ -1561,12 +1604,6 @@ class TestConnectWithPerson:
             ),
             patch.object(
                 extractor,
-                "click_button_by_text",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_text_click,
-            patch.object(
-                extractor,
                 "_navigate_to_page",
                 new_callable=AsyncMock,
             ) as mock_nav,
@@ -1574,9 +1611,10 @@ class TestConnectWithPerson:
             result = await extractor.connect_with_person("testuser")
 
         assert result["status"] == "send_failed"
+        # No fallback navigation and no text-based clicking on the
+        # destructive accept path — the extractor has no text-matching
+        # click primitive at all, so the guard is structural.
         mock_nav.assert_not_awaited()
-        # No text-based clicking on the destructive accept path.
-        mock_text_click.assert_not_awaited()
 
     async def test_incoming_request_send_failed_when_no_first_degree(self, mock_page):
         """Accept clicked but profile never transitions to 1st-degree."""
@@ -1786,6 +1824,54 @@ class TestConnectWithPerson:
         assert clicks == [0, 1]
         textarea_locator.fill.assert_awaited_once()
 
+    async def test_probe_note_limit_handles_two_button_gating_dialog(self, mock_page):
+        """The note-quota probe must open the note editor on the two-button
+        gating dialog (issue #455), mirroring _submit_invite_dialog: nth(0)
+        is "Add a note". The legacy guard required >= 3 buttons, skipped the
+        click, and returned None where the submit path would have surfaced
+        the Premium upsell."""
+        extractor = LinkedInExtractor(mock_page)
+
+        add_note_button = MagicMock()
+        add_note_button.click = AsyncMock()
+
+        button_collection = MagicMock()
+        button_collection.count = AsyncMock(return_value=2)
+        button_collection.nth = MagicMock(return_value=add_note_button)
+
+        textarea_locator = MagicMock()
+        textarea_locator.count = AsyncMock(return_value=0)
+
+        def locator_router(selector: str):
+            if "textarea" in selector:
+                return textarea_locator
+            return button_collection
+
+        mock_page.locator = MagicMock(side_effect=locator_router)
+        mock_page.wait_for_selector = AsyncMock()
+
+        with (
+            patch.object(
+                extractor, "_dialog_is_open", new_callable=AsyncMock, return_value=True
+            ),
+            patch.object(
+                extractor,
+                "_get_premium_upsell_message",
+                new_callable=AsyncMock,
+                side_effect=[None, "Unlock unlimited personalized invites"],
+            ),
+            patch.object(
+                extractor, "_dismiss_dialog", new_callable=AsyncMock
+            ) as mock_dismiss,
+        ):
+            message = await extractor._probe_invite_note_limit()
+
+        # Clicked "Add a note" (btn_count - 2 == index 0), never the primary.
+        button_collection.nth.assert_called_once_with(0)
+        add_note_button.click.assert_awaited_once()
+        assert message == "Unlock unlimited personalized invites"
+        mock_dismiss.assert_awaited_once()
+
     async def test_references_are_grouped_by_section(self, mock_page):
         extractor = LinkedInExtractor(mock_page)
         with (
@@ -1907,6 +1993,7 @@ class TestConnectWithPerson:
 
         assert "main_profile" not in result["sections"]
         assert result["sections"]["posts"] == "Post text"
+        assert result["section_errors"]["main_profile"]["error_type"] == "rate_limit"
 
 
 class TestScrapeCompany:
@@ -2000,6 +2087,7 @@ class TestScrapeCompany:
 
         assert "about" not in result["sections"]
         assert result["sections"]["posts"] == "Posts text"
+        assert result["section_errors"]["about"]["error_type"] == "rate_limit"
 
     async def test_scrape_company_extracts_company_urn(self, mock_page):
         """End-to-end: a canned-search anchor on the company about page
@@ -2093,6 +2181,7 @@ class TestScrapeJob:
             result = await extractor.scrape_job("12345")
 
         assert result["sections"] == {}
+        assert result["section_errors"]["job_posting"]["error_type"] == "rate_limit"
 
     async def test_scrape_job_omits_orphaned_references_when_text_empty(
         self, mock_page
@@ -2597,6 +2686,7 @@ class TestSearchJobs:
 
         assert result["job_ids"] == []
         assert result["sections"] == {}
+        assert result["section_errors"]["search_results"]["error_type"] == "rate_limit"
         mock_ids.assert_not_awaited()
 
     async def test_search_people_omits_orphaned_references(self, mock_page):

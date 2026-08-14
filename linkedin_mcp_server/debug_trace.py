@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any, Literal
 
 from linkedin_mcp_server.common_utils import secure_mkdir, slugify_fragment
@@ -19,6 +20,13 @@ _TRACE_COUNTER = itertools.count(1)
 _TRACE_DIR: Path | None = None
 _TRACE_KEEP = False
 _EXPLICIT_TRACE_DIR = False
+
+# Bounded retention for the shared trace root. Retained runs (bug-report
+# diagnostics) and runs leaked by crashed sessions are pruned once they age
+# out or fall beyond the recent-run cap, so trace-runs/ cannot grow without
+# limit across sessions.
+_PRUNE_MAX_AGE_DAYS = 14
+_PRUNE_KEEP_RECENT_RUNS = 20
 
 
 def _trace_mode() -> TraceMode:
@@ -58,13 +66,75 @@ def get_trace_dir() -> Path | None:
         return None
 
     if _TRACE_DIR is None:
+        root = _trace_root()
         _TRACE_DIR = Path(
             tempfile.mkdtemp(
                 prefix="run-",
-                dir=_trace_root(),
+                dir=root,
             )
         ).resolve()
+        _prune_stale_trace_runs(root, current=_TRACE_DIR)
     return _TRACE_DIR
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _run_last_activity(path: Path) -> float:
+    """Newest mtime of the run dir or anything inside it.
+
+    A directory's own mtime only changes when entries are added or removed,
+    so a long-lived process appending to ``trace.jsonl`` would look stale by
+    dir mtime alone. Any process still writing traces keeps its newest file
+    fresh, which shields concurrently active runs from age-based pruning.
+    """
+    newest = _mtime(path)
+    try:
+        for child in path.rglob("*"):
+            newest = max(newest, _mtime(child))
+    except OSError:
+        pass
+    return newest
+
+
+def _prune_stale_trace_runs(root: Path, *, current: Path | None) -> None:
+    """Best-effort pruning of old ``run-*`` dirs under the shared trace root.
+
+    Keeps the ``_PRUNE_KEEP_RECENT_RUNS`` most recently active runs and
+    drops any run whose last write is older than ``_PRUNE_MAX_AGE_DAYS``.
+    The current session's run dir is never touched. Explicit
+    ``LINKEDIN_DEBUG_TRACE_DIR`` locations are user-managed, live outside
+    this root, and are never pruned. Tracing is best-effort by design: if a
+    pruned run belonged to a process that is somehow still alive, its next
+    ``record_page_trace`` recreates the dir and keeps writing.
+    """
+    try:
+        candidates = [
+            path
+            for path in root.glob("run-*")
+            if path.is_dir() and path.resolve() != current
+        ]
+    except OSError:
+        return
+
+    by_activity = sorted(
+        ((_run_last_activity(path), path) for path in candidates),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    now = time.time()
+    max_age_seconds = _PRUNE_MAX_AGE_DAYS * 86400
+    for index, (last_activity, path) in enumerate(by_activity):
+        if index < _PRUNE_KEEP_RECENT_RUNS and now - last_activity <= max_age_seconds:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            continue
 
 
 def mark_trace_for_retention() -> Path | None:
