@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -112,3 +114,52 @@ def test_safe_source_profile_dir_ignores_generic_env_fallback(monkeypatch):
     )
 
     assert _safe_source_profile_dir() == Path("~/.linkedin-mcp/profile").expanduser()
+
+
+def _make_stale_run(root: Path, name: str, *, age_seconds: float) -> Path:
+    run_dir = root / name
+    run_dir.mkdir(parents=True)
+    stale = time.time() - age_seconds
+    os.utime(run_dir, (stale, stale))
+    return run_dir
+
+
+def test_prune_removes_runs_older_than_max_age(monkeypatch, tmp_path):
+    monkeypatch.setenv("USER_DATA_DIR", str(tmp_path / "profile"))
+    root = tmp_path / "trace-runs"
+    old_run = _make_stale_run(root, "run-old", age_seconds=20 * 86400)
+    fresh_run = _make_stale_run(root, "run-fresh", age_seconds=60)
+
+    current = get_trace_dir()
+
+    assert current is not None and current.exists()
+    assert not old_run.exists()
+    assert fresh_run.exists()
+
+
+def test_prune_removes_runs_beyond_recent_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("USER_DATA_DIR", str(tmp_path / "profile"))
+    monkeypatch.setattr("linkedin_mcp_server.debug_trace._PRUNE_KEEP_RECENT_RUNS", 2)
+    root = tmp_path / "trace-runs"
+    runs = [
+        # Oldest first; all younger than the age cap.
+        _make_stale_run(root, f"run-{idx}", age_seconds=3600 * (4 - idx))
+        for idx in range(4)
+    ]
+
+    current = get_trace_dir()
+
+    assert current is not None and current.exists()
+    # The two most recent survive; the two oldest are pruned.
+    assert [run.exists() for run in runs] == [False, False, True, True]
+
+
+def test_prune_skips_shared_root_when_explicit_dir_is_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("USER_DATA_DIR", str(tmp_path / "profile"))
+    root = tmp_path / "trace-runs"
+    old_run = _make_stale_run(root, "run-old", age_seconds=20 * 86400)
+    monkeypatch.setenv("LINKEDIN_DEBUG_TRACE_DIR", str(tmp_path / "explicit"))
+
+    get_trace_dir()
+
+    assert old_run.exists()
