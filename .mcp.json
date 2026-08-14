@@ -6,6 +6,10 @@
       "headers": {
         "Authorization": "Bearer ${GREPTILE_API_KEY}"
       }
+    },
+    "linkedin": {
+      "command": "uv",
+      "args": ["run", "-m", "linkedin_mcp_server", "--transport", "stdio"]
     }
   }
 }
