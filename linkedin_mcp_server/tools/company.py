@@ -16,8 +16,7 @@ from linkedin_mcp_server.core.exceptions import AuthenticationError
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.scraping import parse_company_sections
-from linkedin_mcp_server.scraping.extractor import _RATE_LIMITED_MSG
-from linkedin_mcp_server.scraping.link_metadata import Reference
+from linkedin_mcp_server.scraping.extractor import build_section_result
 
 logger = logging.getLogger(__name__)
 
@@ -131,27 +130,9 @@ def register_company_tools(
             url = f"https://www.linkedin.com/company/{company_name}/posts/"
             extracted = await extractor.extract_page(url, section_name="posts")
 
-            sections: dict[str, str] = {}
-            references: dict[str, list[Reference]] = {}
-            section_errors: dict[str, dict[str, Any]] = {}
-            if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-                sections["posts"] = extracted.text
-                if extracted.references:
-                    references["posts"] = extracted.references
-            elif extracted.error:
-                section_errors["posts"] = extracted.error
-
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
-            result: dict[str, Any] = {
-                "url": url,
-                "sections": sections,
-            }
-            if references:
-                result["references"] = references
-            if section_errors:
-                result["section_errors"] = section_errors
-            return result
+            return build_section_result(url, "posts", extracted)
 
         except AuthenticationError as e:
             try:

@@ -419,6 +419,46 @@ class ExtractedSection:
     error: dict[str, Any] | None = None
 
 
+def rate_limit_section_error() -> dict[str, Any]:
+    """section_errors entry for a soft rate limit (chrome-only page).
+
+    Keeps the ``error_type``/``error_message`` key shape of
+    ``build_issue_diagnostics`` so clients can handle both uniformly.
+    """
+    return {"error_type": "rate_limit", "error_message": _RATE_LIMITED_MSG}
+
+
+def build_section_result(
+    url: str,
+    section_name: str,
+    extracted: ExtractedSection,
+) -> dict[str, Any]:
+    """Assemble the standard {url, sections, ...} result for one section.
+
+    A soft rate limit is surfaced under ``section_errors`` rather than
+    silently dropped, so a throttled page is distinguishable from a page
+    that genuinely had no content.
+    """
+    sections: dict[str, str] = {}
+    references: dict[str, list[Reference]] = {}
+    section_errors: dict[str, dict[str, Any]] = {}
+    if extracted.text and extracted.text != _RATE_LIMITED_MSG:
+        sections[section_name] = extracted.text
+        if extracted.references:
+            references[section_name] = extracted.references
+    elif extracted.text == _RATE_LIMITED_MSG:
+        section_errors[section_name] = rate_limit_section_error()
+    elif extracted.error:
+        section_errors[section_name] = extracted.error
+
+    result: dict[str, Any] = {"url": url, "sections": sections}
+    if references:
+        result["references"] = references
+    if section_errors:
+        result["section_errors"] = section_errors
+    return result
+
+
 _FEED_RSC_MARKER = "sduiid=com.linkedin.sdui.pagers.feed.mainFeed"
 # Matches a LinkedIn post permalink in either plain or JSON-escaped form
 # (the initial /feed/ HTML embeds the RSC flight data with \u002f for slashes,
@@ -1712,6 +1752,8 @@ class LinkedInExtractor:
                         sections[section_name] = extracted.text
                         if extracted.references:
                             references[section_name] = extracted.references
+                    elif extracted.text == _RATE_LIMITED_MSG:
+                        section_errors[section_name] = rate_limit_section_error()
                     elif extracted.error:
                         section_errors[section_name] = extracted.error
 
@@ -2820,6 +2862,8 @@ class LinkedInExtractor:
                         sections[section_name] = extracted.text
                         if extracted.references:
                             references[section_name] = extracted.references
+                    elif extracted.text == _RATE_LIMITED_MSG:
+                        section_errors[section_name] = rate_limit_section_error()
                     elif extracted.error:
                         section_errors[section_name] = extracted.error
                 except LinkedInScraperException:
@@ -2873,26 +2917,7 @@ class LinkedInExtractor:
         if keywords:
             url += f"?keywords={quote_plus(keywords)}"
         extracted = await self.extract_page(url, section_name="employees")
-
-        sections: dict[str, str] = {}
-        references: dict[str, list[Reference]] = {}
-        section_errors: dict[str, dict[str, Any]] = {}
-        if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-            sections["employees"] = extracted.text
-            if extracted.references:
-                references["employees"] = extracted.references
-        elif extracted.error:
-            section_errors["employees"] = extracted.error
-
-        result: dict[str, Any] = {
-            "url": url,
-            "sections": sections,
-        }
-        if references:
-            result["references"] = references
-        if section_errors:
-            result["section_errors"] = section_errors
-        return result
+        return build_section_result(url, "employees", extracted)
 
     async def scrape_job(self, job_id: str) -> dict[str, Any]:
         """Scrape a single job posting.
@@ -2902,26 +2927,7 @@ class LinkedInExtractor:
         """
         url = f"https://www.linkedin.com/jobs/view/{job_id}/"
         extracted = await self.extract_page(url, section_name="job_posting")
-
-        sections: dict[str, str] = {}
-        references: dict[str, list[Reference]] = {}
-        section_errors: dict[str, dict[str, Any]] = {}
-        if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-            sections["job_posting"] = extracted.text
-            if extracted.references:
-                references["job_posting"] = extracted.references
-        elif extracted.error:
-            section_errors["job_posting"] = extracted.error
-
-        result: dict[str, Any] = {
-            "url": url,
-            "sections": sections,
-        }
-        if references:
-            result["references"] = references
-        if section_errors:
-            result["section_errors"] = section_errors
-        return result
+        return build_section_result(url, "job_posting", extracted)
 
     async def _extract_job_ids(self) -> list[str]:
         """Extract unique job IDs from job card links on the current page.
@@ -3165,7 +3171,9 @@ class LinkedInExtractor:
                 )
 
                 if not extracted.text or extracted.text == _RATE_LIMITED_MSG:
-                    if extracted.error:
+                    if extracted.text == _RATE_LIMITED_MSG:
+                        section_errors["search_results"] = rate_limit_section_error()
+                    elif extracted.error:
                         section_errors["search_results"] = extracted.error
                     # Navigation failed or rate-limited; skip ID extraction
                     break
@@ -3292,26 +3300,7 @@ class LinkedInExtractor:
 
         url = f"https://www.linkedin.com/search/results/people/?{params}"
         extracted = await self.extract_page(url, section_name="search_results")
-
-        sections: dict[str, str] = {}
-        references: dict[str, list[Reference]] = {}
-        section_errors: dict[str, dict[str, Any]] = {}
-        if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-            sections["search_results"] = extracted.text
-            if extracted.references:
-                references["search_results"] = extracted.references
-        elif extracted.error:
-            section_errors["search_results"] = extracted.error
-
-        result: dict[str, Any] = {
-            "url": url,
-            "sections": sections,
-        }
-        if references:
-            result["references"] = references
-        if section_errors:
-            result["section_errors"] = section_errors
-        return result
+        return build_section_result(url, "search_results", extracted)
 
     async def search_companies(
         self,
@@ -3324,26 +3313,7 @@ class LinkedInExtractor:
         """
         url = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(keywords)}"
         extracted = await self.extract_page(url, section_name="search_results")
-
-        sections: dict[str, str] = {}
-        references: dict[str, list[Reference]] = {}
-        section_errors: dict[str, dict[str, Any]] = {}
-        if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-            sections["search_results"] = extracted.text
-            if extracted.references:
-                references["search_results"] = extracted.references
-        elif extracted.error:
-            section_errors["search_results"] = extracted.error
-
-        result: dict[str, Any] = {
-            "url": url,
-            "sections": sections,
-        }
-        if references:
-            result["references"] = references
-        if section_errors:
-            result["section_errors"] = section_errors
-        return result
+        return build_section_result(url, "search_results", extracted)
 
     async def get_inbox(self, limit: int = 20) -> dict[str, Any]:
         """List recent conversations from the messaging inbox."""

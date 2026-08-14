@@ -19,6 +19,8 @@ from linkedin_mcp_server.scraping.extractor import (
     _RATE_LIMITED_MSG,
     _build_feed_references,
     _truncate_linkedin_noise,
+    build_section_result,
+    rate_limit_section_error,
     strip_conversation_chrome,
     strip_linkedin_noise,
 )
@@ -32,6 +34,45 @@ def extracted(
 ) -> ExtractedSection:
     """Create an ExtractedSection for tests."""
     return ExtractedSection(text=text, references=references or [], error=error)
+
+
+class TestBuildSectionResult:
+    """Tests for the shared single-section result assembly."""
+
+    def test_text_populates_sections_and_references(self):
+        refs = [{"kind": "person", "url": "/in/testuser/", "text": "Test User"}]
+        result = build_section_result(
+            "https://www.linkedin.com/x/", "employees", extracted("Body", refs)
+        )
+        assert result["sections"] == {"employees": "Body"}
+        assert result["references"] == {"employees": refs}
+        assert "section_errors" not in result
+
+    def test_rate_limit_sentinel_maps_to_section_errors(self):
+        result = build_section_result(
+            "https://www.linkedin.com/x/", "employees", extracted(_RATE_LIMITED_MSG)
+        )
+        assert result["sections"] == {}
+        assert "references" not in result
+        assert result["section_errors"]["employees"] == rate_limit_section_error()
+        assert result["section_errors"]["employees"]["error_type"] == "rate_limit"
+
+    def test_extraction_error_maps_to_section_errors(self):
+        result = build_section_result(
+            "https://www.linkedin.com/x/",
+            "employees",
+            extracted("", error={"issue_template_path": "/tmp/issue.md"}),
+        )
+        assert result["sections"] == {}
+        assert result["section_errors"]["employees"]["issue_template_path"] == (
+            "/tmp/issue.md"
+        )
+
+    def test_empty_text_without_error_yields_bare_result(self):
+        result = build_section_result(
+            "https://www.linkedin.com/x/", "employees", extracted("")
+        )
+        assert result == {"url": "https://www.linkedin.com/x/", "sections": {}}
 
 
 class TestBuildJobSearchUrl:
@@ -1907,6 +1948,7 @@ class TestConnectWithPerson:
 
         assert "main_profile" not in result["sections"]
         assert result["sections"]["posts"] == "Post text"
+        assert result["section_errors"]["main_profile"]["error_type"] == "rate_limit"
 
 
 class TestScrapeCompany:
@@ -2000,6 +2042,7 @@ class TestScrapeCompany:
 
         assert "about" not in result["sections"]
         assert result["sections"]["posts"] == "Posts text"
+        assert result["section_errors"]["about"]["error_type"] == "rate_limit"
 
     async def test_scrape_company_extracts_company_urn(self, mock_page):
         """End-to-end: a canned-search anchor on the company about page
@@ -2093,6 +2136,7 @@ class TestScrapeJob:
             result = await extractor.scrape_job("12345")
 
         assert result["sections"] == {}
+        assert result["section_errors"]["job_posting"]["error_type"] == "rate_limit"
 
     async def test_scrape_job_omits_orphaned_references_when_text_empty(
         self, mock_page
@@ -2597,6 +2641,7 @@ class TestSearchJobs:
 
         assert result["job_ids"] == []
         assert result["sections"] == {}
+        assert result["section_errors"]["search_results"]["error_type"] == "rate_limit"
         mock_ids.assert_not_awaited()
 
     async def test_search_people_omits_orphaned_references(self, mock_page):

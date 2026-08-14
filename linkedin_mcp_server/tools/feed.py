@@ -18,8 +18,7 @@ from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.core.exceptions import AuthenticationError
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
-from linkedin_mcp_server.scraping.extractor import _RATE_LIMITED_MSG
-from linkedin_mcp_server.scraping.link_metadata import Reference
+from linkedin_mcp_server.scraping.extractor import build_section_result
 
 logger = logging.getLogger(__name__)
 
@@ -76,30 +75,11 @@ def register_feed_tools(
 
             extracted = await extractor.extract_feed(num_posts=num_posts)
 
-            url = "https://www.linkedin.com/feed/"
-            sections: dict[str, str] = {}
-            references: dict[str, list[Reference]] = {}
-            section_errors: dict[str, dict[str, Any]] = {}
-            if extracted.text and extracted.text != _RATE_LIMITED_MSG:
-                sections["feed"] = extracted.text
-                if extracted.references:
-                    references["feed"] = extracted.references
-            elif extracted.text == _RATE_LIMITED_MSG:
-                section_errors["feed"] = {
-                    "error_type": "rate_limit",
-                    "error_message": extracted.text,
-                }
-            elif extracted.error:
-                section_errors["feed"] = extracted.error
-
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
-            result: dict[str, Any] = {"url": url, "sections": sections}
-            if references:
-                result["references"] = references
-            if section_errors:
-                result["section_errors"] = section_errors
-            return result
+            return build_section_result(
+                "https://www.linkedin.com/feed/", "feed", extracted
+            )
 
         except AuthenticationError as e:
             try:
