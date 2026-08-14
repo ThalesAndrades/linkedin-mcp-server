@@ -1827,6 +1827,54 @@ class TestConnectWithPerson:
         assert clicks == [0, 1]
         textarea_locator.fill.assert_awaited_once()
 
+    async def test_probe_note_limit_handles_two_button_gating_dialog(self, mock_page):
+        """The note-quota probe must open the note editor on the two-button
+        gating dialog (issue #455), mirroring _submit_invite_dialog: nth(0)
+        is "Add a note". The legacy guard required >= 3 buttons, skipped the
+        click, and returned None where the submit path would have surfaced
+        the Premium upsell."""
+        extractor = LinkedInExtractor(mock_page)
+
+        add_note_button = MagicMock()
+        add_note_button.click = AsyncMock()
+
+        button_collection = MagicMock()
+        button_collection.count = AsyncMock(return_value=2)
+        button_collection.nth = MagicMock(return_value=add_note_button)
+
+        textarea_locator = MagicMock()
+        textarea_locator.count = AsyncMock(return_value=0)
+
+        def locator_router(selector: str):
+            if "textarea" in selector:
+                return textarea_locator
+            return button_collection
+
+        mock_page.locator = MagicMock(side_effect=locator_router)
+        mock_page.wait_for_selector = AsyncMock()
+
+        with (
+            patch.object(
+                extractor, "_dialog_is_open", new_callable=AsyncMock, return_value=True
+            ),
+            patch.object(
+                extractor,
+                "_get_premium_upsell_message",
+                new_callable=AsyncMock,
+                side_effect=[None, "Unlock unlimited personalized invites"],
+            ),
+            patch.object(
+                extractor, "_dismiss_dialog", new_callable=AsyncMock
+            ) as mock_dismiss,
+        ):
+            message = await extractor._probe_invite_note_limit()
+
+        # Clicked "Add a note" (btn_count - 2 == index 0), never the primary.
+        button_collection.nth.assert_called_once_with(0)
+        add_note_button.click.assert_awaited_once()
+        assert message == "Unlock unlimited personalized invites"
+        mock_dismiss.assert_awaited_once()
+
     async def test_references_are_grouped_by_section(self, mock_page):
         extractor = LinkedInExtractor(mock_page)
         with (

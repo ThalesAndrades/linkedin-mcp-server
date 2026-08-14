@@ -2016,7 +2016,12 @@ class LinkedInExtractor:
             btn_count = await buttons.count()
         except Exception:
             btn_count = 0
-        if btn_count >= 3:
+        # Both layouts place "Add a note" at ``btn_count - 2`` — the legacy
+        # 3-button dialog and the 2-button "Add a note to your invitation?"
+        # gating dialog (see the layout table in _submit_invite_dialog and
+        # issue #455). ``btn_count - 2`` is never the primary button, so the
+        # probe's never-submit guarantee holds for both.
+        if btn_count >= 2:
             try:
                 await buttons.nth(btn_count - 2).click()
             except Exception:
