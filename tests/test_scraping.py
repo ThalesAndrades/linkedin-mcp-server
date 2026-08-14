@@ -1602,12 +1602,6 @@ class TestConnectWithPerson:
             ),
             patch.object(
                 extractor,
-                "click_button_by_text",
-                new_callable=AsyncMock,
-                return_value=True,
-            ) as mock_text_click,
-            patch.object(
-                extractor,
                 "_navigate_to_page",
                 new_callable=AsyncMock,
             ) as mock_nav,
@@ -1615,9 +1609,10 @@ class TestConnectWithPerson:
             result = await extractor.connect_with_person("testuser")
 
         assert result["status"] == "send_failed"
+        # No fallback navigation and no text-based clicking on the
+        # destructive accept path — the extractor has no text-matching
+        # click primitive at all, so the guard is structural.
         mock_nav.assert_not_awaited()
-        # No text-based clicking on the destructive accept path.
-        mock_text_click.assert_not_awaited()
 
     async def test_incoming_request_send_failed_when_no_first_degree(self, mock_page):
         """Accept clicked but profile never transitions to 1st-degree."""

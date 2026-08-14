@@ -942,47 +942,6 @@ class LinkedInExtractor:
         logger.debug("_navigate_to_page: target=%s", url)
         await self._goto_with_auth_checks(url)
 
-    # ------------------------------------------------------------------
-    # Generic browser helpers for LLM-driven connection flow
-    # ------------------------------------------------------------------
-
-    async def get_page_text(self) -> str:
-        """Extract innerText from the main content area of the current page."""
-        text = await self._page.evaluate(
-            "() => (document.querySelector('main') || document.body).innerText || ''"
-        )
-        return strip_linkedin_noise(text) if isinstance(text, str) else ""
-
-    async def click_button_by_text(
-        self, text: str, *, scope: str = "main", timeout: int = 5000
-    ) -> bool:
-        """Click the first button/link whose visible text is exactly *text*.
-
-        Uses a regex filter for exact matching to avoid substring false
-        positives (e.g. "Connect" matching "connections").
-        Returns True if clicked, False if no match found.
-        """
-        matches = (
-            self._page.locator(scope)
-            .locator("button, a, [role='button']")
-            .filter(has_text=re.compile(rf"^{re.escape(text)}$"))
-        )
-        count = await matches.count()
-        logger.debug("click_button_by_text(%r): %d matches in %s", text, count, scope)
-        if count == 0:
-            return False
-        target = matches.first
-        try:
-            await target.scroll_into_view_if_needed(timeout=timeout)
-        except Exception:
-            logger.debug("Scroll failed for button '%s'", text, exc_info=True)
-        try:
-            await target.click(timeout=timeout)
-            return True
-        except Exception:
-            logger.debug("Click failed for button '%s'", text, exc_info=True)
-            return False
-
     async def _dialog_is_open(self, *, timeout: int = 1000) -> bool:
         """Return whether a dialog is currently open (structural check)."""
         locator = self._page.locator(_DIALOG_SELECTOR)
